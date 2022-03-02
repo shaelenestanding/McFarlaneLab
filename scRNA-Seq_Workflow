@@ -271,4 +271,4 @@ head(CMZ_Subset1.markers)
 #export all marker information
 write.csv(CMZ_Subset1.markers,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CMZ_Subset1_Markers_FINAL1.csv", row.names = FALSE)
 
-#End of code used for thesis project
+#End of code used for thesis project. Last changes made March 2, 2022
