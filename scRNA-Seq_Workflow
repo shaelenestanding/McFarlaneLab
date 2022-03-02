@@ -1,0 +1,274 @@
+#scRNA-Seq workflow (McFarlane laboratory) written by Shaelene Standing (Last updated February 2022)
+#this program takes a h5 file that has been processed through CellRanger after single-cell RNA-sequencing 
+#using Seurat 4.0.3 from Satija lab (https://satijalab.org/seurat/)
+
+#install Seurat
+install.packages("Seurat", dependencies = TRUE)
+
+#necessary packages
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(ggplot2)
+library(data.table)
+library(magrittr)
+install.packages("hdf5r")
+#install UMAP
+library(reticulate)
+use_python("/Users/shaelenestanding/opt/anaconda3/lib/python3.8/")
+reticulate::py_install(packages = 'umap-learn')
+
+#Note that the zebrafish reference genome being used is Zv10
+
+#import files from the cell ranger output 
+#Note that the file path needs to be changed to what is on your computer to input the data
+RC.data <- Read10X_h5("/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/filtered_feature_bc_matrix.h5", use.names = TRUE, unique.features = TRUE)
+
+#create Seurat object and quality control
+RC <- CreateSeuratObject(counts = RC.data, project = "RC", min.cells = 3, min.features = 200)
+
+#add barcode metadata - extract sample ID from barcode by strpsplit on '-' and extracting second element of resulting list (here the indentifier is appended after '-' to the barcode)
+Sample_ID <- sapply(strsplit(rownames(RC@meta.data), split = '-'), "[[",2)
+
+# add barcode metadata - supply sample ID as additional metadata
+RC <- AddMetaData(object = RC, metadata = data.frame(Sample_ID = Sample_ID, row.names = rownames(RC@meta.data)))
+RC@meta.data$Sample_ID = dplyr::recode(RC@meta.data$Sample_ID,
+                                       "1"="Wildtype",
+                                       "2"="Mutant")
+
+##WHEN THERE ARE MORE THAN ONE TRIAL IN THE DATA
+##Add Group_ID to metadata (just wildtype and mutant - above will be wildtype_1 etc. for each replicate)
+#Group_ID <- c("Wildtype", "Mutant", "Wildtype", "Mutant")
+
+Idents(RC) <- 'Sample_ID'
+
+##WHEN THERE ARE MORE THAN ONE TRIAL IN THE DATA
+#names(Group_ID) <- levels(RC)
+#RC_A <- RenameIdents(RC, Group_ID)
+
+#quality control for mito
+RC[["percent.mt"]] <- PercentageFeatureSet(RC, pattern = "^MT-")
+
+#store the features of quality control as nFeature_RNA, nCount_RNA, and percent.mt
+# * note these are the values used by the other lab as well 
+RCQ <- subset(RC, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+
+#normalize data (with default parameters - LogNormalize method and scale factor 10000)
+RCQ <- NormalizeData(RCQ)
+
+#Find variable features (with default parameters)
+RCQ <- FindVariableFeatures(RCQ)
+
+##IF ISSUES WITH RAM SPACE IN SESSION
+#install.packages("usethis")
+#library(usethis) 
+#usethis::edit_r_environ()
+##set top line to R_MAX_VSIZE=100Gb
+
+#scale all genes in the data, not just highly variable genes (linear transformation)
+all.genes <- rownames(RCQ)
+RCQ <- ScaleData(RCQ, features = all.genes)
+
+#linear dimensional reduction on scaled data (on previously determined variable features)
+RCQ <- RunPCA(RCQ)
+
+#determine dimensionality cutoff
+RCQ <- JackStraw(RCQ, num.replicate = 100)
+RCQ <- ScoreJackStraw(RCQ, dims = 1:20)
+#visualize to determine cut off (better to include more than less) 
+ElbowPlot(RCQ)
+
+#cluster the cells
+#dims number is decided from graph above (what the top cutoff is, as set it is 10)
+RCQ <- FindNeighbors(RCQ, dims = 1:16)
+
+#can choose to vary the resolution - can increase for larger datasets (lower resolution = fewer clusters)
+#review this and change the resolution until you are happy with clusters
+#I chose 0.5 resolution to start and 0.8 resolution which made many clusters 
+RCQ <- FindClusters(RCQ, resolution = 0.5)
+
+RCQ2 <- RCQ
+
+#Idents(RCQ) can be used to look at the clusters if you are interested
+
+#non-linear dimensional reduction
+#Run UMAP
+RCQ <- RunUMAP(object = RCQ, dims = 1:16)
+
+RCQ2 <- RunUMAP(object = RCQ2, dims = 1:16)
+
+#plot out results (umap plot)
+DimPlot(object = RCQ, reduction = "umap", label = TRUE, split.by = "Sample_ID")
+
+DimPlot(object = RCQ2, reduction = "umap", label = TRUE, split.by = "Sample_ID")
+
+#FINDING MARKERS TO IDENTIFY EACH CLUSTER AS ITS APPROPRIATE CELL TYPE
+#find markers for every cluster compared to all remaining cells, report only the positive ones
+RCQ.markers <- FindAllMarkers(RCQ, min.pct = 0.25, logfc.threshold = 0.25)
+RCQ.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
+
+#export all marker information
+write.csv(RCQ.markers,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/AllClusters_Markers_FINAL1.csv", row.names = FALSE)
+
+#table of cell type by sample ID or group
+cell.number.bycluster <- table(RCQ@meta.data$Sample_ID, RCQ@meta.data$seurat_clusters)
+write.csv(cell.number.bycluster,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellNumberbyCluster_FINAL1.csv", row.names = FALSE)
+
+#stacked bar plot 
+cellClusterNumbers <- as.data.frame.matrix(cell.number.bycluster)
+clusterProportionData <- t(cellClusterNumbers)
+#convert data to percentage of total cells to normalize it
+data_percentage <- apply(clusterProportionData, 2, function(x){x*100/sum(x,na.rm=T)})
+#chart we care to export
+PercentByClusterBarChart <- barplot(as.matrix(data_percentage), main = "Stacked barchart", xlab = "Genotype", ylab = "Percentage of Total Number of Cells", 
+                                    legend.text = colnames(cellClusterNumbers), xlim = c(0,3),
+                                    args.legend = list(y = "n", x = "topright", ncol = 1),
+                                    col = c("darkred", "gold", "blue", "orange", "forestgreen", "magenta", "black", "grey", "white", "purple", "pink", "yellow", "green", "violet", "skyblue", "darkorange", "royalblue", "darkgrey", "green" ))
+
+#view data (choose genes as desired)
+#Violin plot expression
+VlnPlot(RCQ, ncol = 3, features = c("col15a1b","bmp4", "ccnd1", "nrp1a", "nrp2b", "hes6", "atoh7", "vsx2", "neurod4"))
+#View marker genes based on genes of interest to view their expression across samples
+FeaturePlot(RCQ, ncol = 3, split.by = NULL, c("col15a1b","bmp4", "ccnd1", "nrp1a", "nrp2b", "hes6", "atoh7", "vsx2", "neurod4"))
+#View marker genes with the clusters labeled 
+FeaturePlot(RCQ, ncol = 3, label = TRUE, split.by = NULL, c("ascl1a", "glula", "rlbp1a", "gfap", "sema3fa"))
+
+#find markers for each cluster and can then identify clusters from there
+#cluster 0 markers (example)
+cluster0.markers <- FindMarkers(RCQ, ident.1 = 0, min.pct = 0.25)
+head(cluster0.markers, n = 15)
+
+#rename clusters based on identification above
+RCQ_CMZ <- RenameIdents(RCQ, '0' = "bipolar cells", '1' = "ciliary marginal zone progenitors", '2' = "horizontal cells", '3' = "amacrine cells", 
+                        '4' = "retinal ganglion cells", '5' = "pericytes", '6' = "müller glia", '7' = "photoreceptors", 
+                        '8' = "skin", '9' = "müller glia", '10' = "lens", '11' = "pigment cells", 
+                        '12' = "skin", '13' = "amacrine cells", '14' = "retinal pigment epithelium", '15' = "pigment cells", 
+                        '16' = "skin", '17' = "müller glia", '18' = "microglia", '19' = "vascular endothelial cells")
+#reset the identities to the newly named cluster cell types
+RCQ_CMZ$seurat_clusters.sample <- paste(Idents(RCQ_CMZ), RCQ_CMZ$Sample_ID, sep = "_")
+RCQ_CMZ$seurat_clusters <- Idents(RCQ_CMZ)
+Idents(RCQ_CMZ) <- "seurat_clusters.sample"
+
+#identities needed for UMAP
+Idents(RCQ_CMZ) <- "seurat_clusters"
+#rerun the dim plot with the newly labelled clusters 
+DimPlot(object = RCQ_CMZ, reduction = "umap", label = FALSE, split.by = "Sample_ID")
+#other options to view UMAP (can add split.by statement at end if want the samples split)
+DimPlot(RCQ_CMZ, reduction = "umap", label = TRUE, pt.size = 0.5, split.by = "Sample_ID") + NoLegend()
+
+DimPlot(RCQ_CMZ, reduction = "umap", label = FALSE, pt.size = 0.5) 
+
+#table of cell type by sample ID for the identified cell type clusters
+cell.number.bycelltype <- table(RCQ_CMZ@meta.data$Sample_ID, RCQ_CMZ@meta.data$seurat_clusters)
+write.csv(cell.number.bycelltype,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellNumberbyCellType_FINAL1.csv", row.names = FALSE)
+#stacked bar plot 
+cellTypeNumbers <- as.data.frame.matrix(cell.number.bycelltype)
+cellTypeProportionData <- t(cellTypeNumbers)
+#convert data to percentage of total cells to normalize it
+data_percentage_cellType <- apply(cellTypeProportionData, 2, function(x){x*100/sum(x,na.rm=T)})
+#chart we care to export
+PercentByCellTypeBarChart <- barplot(as.matrix(data_percentage_cellType), main = "Proportion of Cell Types per Sample", xlab = "Genotype", ylab = "Percentage of Total Number of Cells", 
+                                     legend.text = colnames(cellTypeNumbers), xlim = c(0,5),
+                                     args.legend = list(y = "n", x = "topright", ncol = 1),
+                                     col = c("firebrick3", "darkorange", "darkgoldenrod1", "gold", "olivedrab1", "seagreen", "cornflowerblue", "royalblue3", "slateblue1", "orchid3", "lightpink2", "lightsalmon1", "mistyrose2", "peachpuff4"))
+
+#differential expression between samples and clusters (https://www.biostars.org/p/399518/) OR (https://satijalab.org/seurat/archive/v3.1/immune_alignment.html)
+#rerun this for each cell type (can look for unique differentially expressed genes)
+#reset identities needed for differential expression
+Idents(RCQ_CMZ) <- "seurat_clusters.sample"
+CMZ.impact <- FindMarkers(RCQ_CMZ, ident.1 = "ciliary marginal zone progenitors_Wildtype", ident.2 = "ciliary marginal zone progenitors_Mutant", verbose=FALSE)
+#view the top 10 differentially expressed genes
+  head(CMZ.impact, n = 10)
+#export file with all markers
+write.csv(CMZ.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/CMZ_Impact_FINAL1.csv", row.names = TRUE)
+
+#repeat for all cell types
+BC.impact <- FindMarkers(RCQ_CMZ, ident.1 = "bipolar cells_Wildtype", ident.2 = "bipolar cells_Mutant", verbose=FALSE)
+write.csv(BC.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/BC_Impact_FINAL1.csv", row.names = TRUE)
+
+HC.impact <- FindMarkers(RCQ_CMZ, ident.1 = "horizontal cells_Wildtype", ident.2 = "horizontal cells_Mutant", verbose=FALSE)
+write.csv(HC.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/HC_Impact_FINAL1.csv", row.names = TRUE)
+
+RGC.impact <- FindMarkers(RCQ_CMZ, ident.1 = "retinal ganglion cells_Wildtype", ident.2 = "retinal ganglion cells_Mutant", verbose=FALSE)
+write.csv(RGC.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/RGC_Impact_FINAL1.csv", row.names = TRUE)
+
+peri.impact <- FindMarkers(RCQ_CMZ, ident.1 = "pericytes_Wildtype", ident.2 = "pericytes_Mutant", verbose=FALSE)
+write.csv(peri.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/peri_Impact_FINAL1.csv", row.names = TRUE)
+
+MG.impact <- FindMarkers(RCQ_CMZ, ident.1 = "müller glia_Wildtype", ident.2 = "müller glia_Mutant", verbose=FALSE)
+write.csv(MG.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/MG_Impact_FINAL1.csv", row.names = TRUE)
+
+lens.impact <- FindMarkers(RCQ_CMZ, ident.1 = "lens_Wildtype", ident.2 = "lens_Mutant", verbose=FALSE)
+write.csv(lens.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/lens_Impact_FINAL1.csv", row.names = TRUE)
+
+pigment.impact <- FindMarkers(RCQ_CMZ, ident.1 = "pigment cells_Wildtype", ident.2 = "pigment cells_Mutant", verbose=FALSE)
+write.csv(pigment.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/pigment_Impact_FINAL1.csv", row.names = TRUE)
+
+photo.impact <- FindMarkers(RCQ_CMZ, ident.1 = "photoreceptors_Wildtype", ident.2 = "photoreceptors_Mutant", verbose=FALSE)
+write.csv(photo.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/photo_Impact_FINAL1.csv", row.names = TRUE)
+
+skin.impact <- FindMarkers(RCQ_CMZ, ident.1 = "skin_Wildtype", ident.2 = "skin_Mutant", verbose=FALSE)
+write.csv(skin.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/skin_Impact_FINAL1.csv", row.names = TRUE)
+
+AC.impact <- FindMarkers(RCQ_CMZ, ident.1 = "amacrine cells_Wildtype", ident.2 = "amacrine cells_Mutant", verbose=FALSE)
+write.csv(AC.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/AC_Impact_FINAL1.csv", row.names = TRUE)
+
+RPE.impact <- FindMarkers(RCQ_CMZ, ident.1 = "retinal pigment epithelium_Wildtype", ident.2 = "retinal pigment epithelium_Mutant", verbose=FALSE)
+write.csv(RPE.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/RPE_Impact_FINAL1.csv", row.names = TRUE)
+
+micro.impact <- FindMarkers(RCQ_CMZ, ident.1 = "microglia_Wildtype", ident.2 = "microglia_Mutant", verbose=FALSE)
+write.csv(micro.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/micro_Impact_FINAL1.csv", row.names = TRUE)
+
+vascular.impact <- FindMarkers(RCQ_CMZ, ident.1 = "vascular endothelial cells_Wildtype", ident.2 = "vascular endothelial cells_Mutant", verbose=FALSE)
+write.csv(vascular.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/vascular_Impact_FINAL1.csv", row.names = TRUE)
+
+#SUBSET SPECIFIC CELL TYPE
+#identities needed for UMAP
+Idents(RCQ_CMZ) <- "seurat_clusters"
+#subset out the specific cell type if interest
+CMZ_Subset <- subset(x = RCQ_CMZ, idents = "ciliary marginal zone progenitors")
+
+#RERUN ANALYSIS ON SUBSET OF DATA
+#linear dimensional reduction on scaled data (on previously determined variable features)
+CMZ_Subset1 <- RunPCA(CMZ_Subset)
+
+#determine dimensionality cutoff
+CMZ_Subset1 <- JackStraw(CMZ_Subset1, num.replicate = 100)
+CMZ_Subset1 <- ScoreJackStraw(CMZ_Subset1, dims = 1:20)
+#visualize to determine cut off (better to include more than less) 
+ElbowPlot(CMZ_Subset1)
+
+#MAY NEED TO USE THIS WHEN THERE ARE MORE THAN ONE TRIAL IN THE DATA
+#https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+
+#cluster the cells
+#dims number is decided from graph above (what the top cutoff is, as set it is 10)
+CMZ_Subset1 <- FindNeighbors(CMZ_Subset1, dims = 1:11)
+
+##make sure to use integrated data when mapping - WHEN THERE ARE MORE THAN ONE TRIAL IN THE DATA
+#DefaultAssay(MisA) <- 'integrated'
+
+#can choose to vary the resolution - can increase for larger datasets (lower resolution = fewer clusters)
+#review this and change the resolution until you are happy with clusters
+CMZ_Subset1 <- FindClusters(CMZ_Subset1, resolution = 0.5)
+
+#Idents(CMZ_Subset1) can be used to look at the clusters if you are interested
+
+#Run UMAP
+CMZ_Subset1 <- RunUMAP(object = CMZ_Subset1, dims = 1:11)
+
+#plot out results (umap plot)
+DimPlot(object = CMZ_Subset1, reduction = "umap", label = TRUE, split.by = "Sample_ID")
+
+##save results (can also export file when it shows up in the plot view panel in the right hand side)
+#saveRDS(RCQu, file = "/Users/shaelenestanding/Desktop/mcfarlane lab/code/RCQu_output.rds")
+
+#FINDING MARKERS TO IDENTIFY EACH CLUSTER AS ITS APPROPRIATE CELL TYPE
+#find markers for every cluster compared to all remaining cells, report only the positive ones
+CMZ_Subset1.markers <- FindAllMarkers(CMZ_Subset1, min.pct = 0.25, logfc.threshold = 0.25)
+CMZ_Subset1.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
+head(CMZ_Subset1.markers)
+#export all marker information
+write.csv(CMZ_Subset1.markers,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CMZ_Subset1_Markers_FINAL1.csv", row.names = FALSE)
+
+#End of code used for thesis project
