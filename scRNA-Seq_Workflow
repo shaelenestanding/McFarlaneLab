@@ -271,4 +271,74 @@ head(CMZ_Subset1.markers)
 #export all marker information
 write.csv(CMZ_Subset1.markers,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CMZ_Subset1_Markers_FINAL1.csv", row.names = FALSE)
 
-#End of code used for thesis project. Last changes made March 2, 2022
+#rename clusters based on identification above
+CMZ_Subset1 <- RenameIdents(CMZ_Subset1, '2' = "Zone 1", '0' = "Zone 2", '1' = "Zone 3", '3' = "Zone 2", 
+                        '4' = "Zone 3", '5' = "Unknown", '6' = "Zone 3", '7' = "Zone 2")
+#reset the identities to the newly named cluster cell types
+CMZ_Subset1$seurat_clusters.sample <- paste(Idents(CMZ_Subset1), CMZ_Subset1$Sample_ID, sep = "_")
+CMZ_Subset1$seurat_clusters <- Idents(CMZ_Subset1)
+Idents(CMZ_Subset1) <- "seurat_clusters.sample"
+
+#identities needed for UMAP
+Idents(CMZ_Subset1) <- "seurat_clusters"
+#rerun the dim plot with the newly labelled clusters and custom colours
+DimPlot(object = CMZ_Subset1, reduction = "umap", label = FALSE, split.by = "Sample_ID", cols = c("Zone 1" = "palegreen4", "Zone 2" = "cornflowerblue", "Zone 3" = "sienna1", "Unknown" = "grey"))
+
+#Cell type proportion analysis
+#table of cell type by sample ID for the identified cell type clusters
+CMZ_cell.number.bycelltype <- table(CMZ_Subset1@meta.data$Sample_ID, CMZ_Subset1@meta.data$seurat_clusters)
+write.csv(CMZ_cell.number.bycelltype,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CMZ_CellNumberbyCellType_FINAL1.csv", row.names = FALSE)
+#stacked bar plot 
+CMZ_cellTypeNumbers <- as.data.frame.matrix(CMZ_cell.number.bycelltype)
+CMZ_cellTypeProportionData <- t(CMZ_cellTypeNumbers)
+#convert data to percentage of total cells to normalize it
+CMZ_data_percentage_cellType <- apply(CMZ_cellTypeProportionData, 2, function(x){x*100/sum(x,na.rm=T)})
+#chart we care to export
+CMZ_PercentByCellTypeBarChart <- barplot(as.matrix(CMZ_data_percentage_cellType), main = "Proportion of Cell Types per Sample in CMZ", xlab = "Genotype", ylab = "Percentage of Total Number of Cells", 
+                                     legend.text = colnames(CMZ_cellTypeNumbers), xlim = c(0,3.5),
+                                     args.legend = list(y = "n", x = "topright", ncol = 1),
+                                     col = c("palegreen4", "cornflowerblue","sienna1", "grey"))
+#export actual percentages
+write.csv(CMZ_data_percentage_cellType,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CMZ_CellPercentagebyCellType_FINAL1.csv", row.names = FALSE)
+
+#differential expression between samples and clusters (https://www.biostars.org/p/399518/) OR (https://satijalab.org/seurat/archive/v3.1/immune_alignment.html)
+#rerun this for each cell type (can look for unique differentially expressed genes)
+#reset identities needed for differential expression
+Idents(CMZ_Subset1) <- "seurat_clusters.sample"
+zone1_CMZ.impact <- FindMarkers(CMZ_Subset1, ident.1 = "Zone 1_Wildtype", ident.2 = "Zone 1_Mutant", verbose=FALSE)
+#view the top 10 differentially expressed genes
+head(zone1_CMZ.impact, n = 10)
+#export file with all markers
+write.csv(zone1_CMZ.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/zone1_CMZ_Impact_FINAL1.csv", row.names = TRUE)
+
+#repeat for all cell types
+zone2_CMZ.impact <- FindMarkers(CMZ_Subset1, ident.1 = "Zone 2_Wildtype", ident.2 = "Zone 2_Mutant", verbose=FALSE)
+write.csv(zone2_CMZ.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/zone2_CMZ_Impact_FINAL1.csv", row.names = TRUE)
+
+zone3_CMZ.impact <- FindMarkers(CMZ_Subset1, ident.1 = "Zone 3_Wildtype", ident.2 = "Zone 3_Mutant", verbose=FALSE)
+write.csv(zone3_CMZ.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/zone3_CMZ_Impact_FINAL1.csv", row.names = TRUE)
+
+unknown_CMZ.impact <- FindMarkers(CMZ_Subset1, ident.1 = "Unknown_Wildtype", ident.2 = "Unknown_Mutant", verbose=FALSE)
+write.csv(unknown_CMZ.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/single-cell RNA-seq/FINAL_JAN_SEQ/CellTypeAnalysis/unknown_CMZ_Impact_FINAL1.csv", row.names = TRUE)
+
+#complete differential expression analysis using exported genes
+
+#FeaturePlot of Select Genes of Interest
+#view data (choose genes as desired)
+#Violin plot expression
+Idents(CMZ_Subset1) <- "seurat_clusters"
+VlnPlot(CMZ_Subset1, ncol = 4, split.by = "Sample_ID", features = c("hes6", "neurod4"))
+
+#subset the wild type and mutant samples so they can be individually plotted
+ob.list <- SplitObject(CMZ_Subset1, split.by = "Sample_ID")
+plot.list <- lapply(X = ob.list, FUN = function(x) {
+  DimPlot(x, reduction = "umap", label = FALSE, label.size = 4)
+  })
+CMZ_WT1 <- subset(x = ob.list$"Wildtype")
+CMZ_MUT1 <- subset(x = ob.list$"Mutant")
+
+#View marker genes in UMAPs with the clusters labeled for each genotype
+FeaturePlot(CMZ_WT1, ncol = 4, label = TRUE, c("hes6", "neurod4", "tuba1a", "mki67", "mcm7", "mcm2", "btg1", "gnb1a"))
+FeaturePlot(CMZ_MUT1, ncol = 4, label = TRUE, c("hes6", "neurod4", "tuba1a", "mki67", "mcm7", "mcm2", "btg1", "gnb1a"))
+
+#End of code used for thesis project. Last changes made March 21, 2022
