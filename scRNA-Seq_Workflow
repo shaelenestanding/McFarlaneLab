@@ -325,20 +325,28 @@ write.csv(unknown_CMZ.impact,"/Users/shaelenestanding/Desktop/year 4/thesis/sing
 
 #FeaturePlot of Select Genes of Interest
 #view data (choose genes as desired)
-#Violin plot expression
-Idents(CMZ_Subset1) <- "seurat_clusters"
-VlnPlot(CMZ_Subset1, ncol = 4, split.by = "Sample_ID", features = c("hes6", "neurod4"))
 
-#subset the wild type and mutant samples so they can be individually plotted
-ob.list <- SplitObject(CMZ_Subset1, split.by = "Sample_ID")
-plot.list <- lapply(X = ob.list, FUN = function(x) {
+#Subset out zone 3 of the CMZ
+ob.list2 <- SplitObject(CMZ_Subset1, split.by = "seurat_clusters")
+plot.list <- lapply(X = ob.list2, FUN = function(x) {
   DimPlot(x, reduction = "umap", label = FALSE, label.size = 4)
-  })
-CMZ_WT1 <- subset(x = ob.list$"Wildtype")
-CMZ_MUT1 <- subset(x = ob.list$"Mutant")
+})
+CMZ_zone3 <- subset(x = ob.list2$"Zone 3")
 
-#View marker genes in UMAPs with the clusters labeled for each genotype
-FeaturePlot(CMZ_WT1, ncol = 4, label = TRUE, c("hes6", "neurod4", "tuba1a", "mki67", "mcm7", "mcm2", "btg1", "gnb1a"))
-FeaturePlot(CMZ_MUT1, ncol = 4, label = TRUE, c("hes6", "neurod4", "tuba1a", "mki67", "mcm7", "mcm2", "btg1", "gnb1a"))
+#violin plot for zone 3 for desired markers
+Idents(CMZ_Subset1) <- "seurat_clusters"
+VlnPlot(CMZ_zone3, ncol = 4, split.by = "Sample_ID", split.plot = TRUE, features = c("hes6", "neurod4"), cols = c("Mutant" = "cornflowerblue", "Wildtype" = "sienna1")) 
 
-#End of code used for thesis project. Last changes made March 21, 2022
+#subset out wild type and mutant cells for zone 3 of the CMZ
+ob.list3 <- SplitObject(CMZ_zone3, split.by = "Sample_ID")
+plot.list <- lapply(X = ob.list3, FUN = function(x) {
+  DimPlot(x, reduction = "umap", label = FALSE, label.size = 4)
+})
+CMZ_zone3_WT1 <- subset(x = ob.list3$"Wildtype")
+CMZ_zone3_MUT1 <- subset(x = ob.list3$"Mutant")
+
+#feature plots for zone 3 of the CMZ for select genes
+FeaturePlot(CMZ_zone3_WT1, ncol = 2, label = TRUE, c("hes6", "neurod4"))
+FeaturePlot(CMZ_zone3_MUT1, ncol = 2, label = TRUE, c("hes6", "neurod4"))
+
+#End of code used for thesis project. Last changes made March 25, 2022
